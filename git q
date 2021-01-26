@@ -1,0 +1,236 @@
+[33mcommit cde0c76849bc74c920ac23e7b4cdedc33196a32a[m[33m ([m[1;36mHEAD -> [m[1;32mimprove_froze_cache[m[33m)[m
+Author: Sam Clegg <sbc@chromium.org>
+Date:   Mon Jan 25 14:17:36 2021
+
+    Avoid writing even sanity.txt if FROZEN_CACHE is enabled
+    
+    These improvements to the FROZE_CACHE setting allow for a
+    pre-populated read-only cache.  In thie senario the cache
+    is cannot ever be locked, and that we don't even write
+    the sanity file.
+    
+    Users can still forece a sanity check with `emcc --check`
+    but no sanity file will ever be written.
+
+[1mdiff --git a/tests/test_sanity.py b/tests/test_sanity.py[m
+[1mindex b09eb0a1c..ba440ddc6 100644[m
+[1m--- a/tests/test_sanity.py[m
+[1m+++ b/tests/test_sanity.py[m
+[36m@@ -399,8 +399,8 @@[m [mfi[m
+ [m
+     self.assertContained('hello from emcc with no config file', self.run_js('a.out.js'))[m
+ [m
+[31m-  def erase_cache(self):[m
+[31m-    Cache.erase()[m
+[32m+[m[32m  def clear_cache(self):[m
+[32m+[m[32m    self.run_process([EMCC, '--clear-cache'])[m
+     self.assertCacheEmpty()[m
+ [m
+   def assertCacheEmpty(self):[m
+[36m@@ -415,7 +415,7 @@[m [mfi[m
+     BUILDING_MESSAGE = 'generating system library: %s'[m
+ [m
+     restore_and_set_up()[m
+[31m-    self.erase_cache()[m
+[32m+[m[32m    self.clear_cache()[m
+ [m
+     # Building a file that *does* need something *should* trigger cache[m
+     # generation, but only the first time[m
+[36m@@ -455,7 +455,7 @@[m [mfi[m
+   # FROZEN_CACHE prevents cache clears, and prevents building[m
+   def test_FROZEN_CACHE(self):[m
+     restore_and_set_up()[m
+[31m-    self.erase_cache()[m
+[32m+[m[32m    self.clear_cache()[m
+     self.ensure_cache()[m
+     self.assertTrue(os.path.exists(Cache.dirname))[m
+     # changing config file should not clear cache[m
+[36m@@ -634,19 +634,19 @@[m [mfi[m
+ [m
+     print('normal build')[m
+     with env_modify({'EMCC_FORCE_STDLIBS': None}):[m
+[31m-      Cache.erase()[m
+[32m+[m[32m      self.clear_cache()[m
+       build()[m
+       test()[m
+ [m
+     print('wacky env vars, these should not mess our bootstrapping')[m
+     with env_modify({'EMCC_FORCE_STDLIBS': '1'}):[m
+[31m-      Cache.erase()[m
+[32m+[m[32m      self.clear_cache()[m
+       build()[m
+       test()[m
+ [m
+   def test_vanilla(self):[m
+     restore_and_set_up()[m
+[31m-    Cache.erase()[m
+[32m+[m[32m    self.clear_cache()[m
+ [m
+     def make_fake(report):[m
+       with open(config_file, 'a') as f:[m
+[36m@@ -690,10 +690,10 @@[m [mfi[m
+   def test_embuilder_wasm_backend(self):[m
+     restore_and_set_up()[m
+     # the --lto flag makes us build wasm-bc[m
+[31m-    self.do([EMCC, '--clear-cache'])[m
+[32m+[m[32m    self.clear_cache()[m
+     self.run_process([EMBUILDER, 'build', 'libemmalloc'])[m
+     self.assertExists(os.path.join(config.CACHE, 'sysroot', 'lib', 'wasm32-emscripten'))[m
+[31m-    self.do([EMCC, '--clear-cache'])[m
+[32m+[m[32m    self.clear_cache()[m
+     self.run_process([EMBUILDER, 'build', 'libemmalloc', '--lto'])[m
+     self.assertExists(os.path.join(config.CACHE, 'sysroot', 'lib', 'wasm32-emscripten', 'lto'))[m
+ [m
+[1mdiff --git a/tools/cache.py b/tools/cache.py[m
+[1mindex c36925862..aa2f2f5f1 100644[m
+[1m--- a/tools/cache.py[m
+[1m+++ b/tools/cache.py[m
+[36m@@ -37,6 +37,11 @@[m [mclass Cache:[m
+     self.filelock = filelock.FileLock(self.filelock_name)[m
+ [m
+   def acquire_cache_lock(self):[m
+[32m+[m[32m    if config.FROZEN_CACHE:[m
+[32m+[m[32m      # Raise an exception here rather than exit_with_error since in practice this[m
+[32m+[m[32m      # should never happen[m
+[32m+[m[32m      raise Exception('Attempt to lock the cache but FROZEN_CACHE is set')[m
+[32m+[m
+     if not self.EM_EXCLUSIVE_CACHE_ACCESS and self.acquired_count == 0:[m
+       logger.debug('PID %s acquiring multiprocess file lock to Emscripten cache at %s' % (str(os.getpid()), self.dirname))[m
+       try:[m
+[36m@@ -115,10 +120,11 @@[m [mclass Cache:[m
+     self.erase_file(self.get_lib_name(name))[m
+ [m
+   def erase_file(self, shortname):[m
+[31m-    name = os.path.join(self.dirname, shortname)[m
+[31m-    if os.path.exists(name):[m
+[31m-      logging.info('Cache: deleting cached file: %s', name)[m
+[31m-      tempfiles.try_delete(name)[m
+[32m+[m[32m    with self.lock():[m
+[32m+[m[32m      name = os.path.join(self.dirname, shortname)[m
+[32m+[m[32m      if os.path.exists(name):[m
+[32m+[m[32m        logging.info('Cache: deleting cached file: %s', name)[m
+[32m+[m[32m        tempfiles.try_delete(name)[m
+ [m
+   def get_lib(self, libname, *args, **kwargs):[m
+     name = self.get_lib_name(libname)[m
+[36m@@ -134,14 +140,14 @@[m [mclass Cache:[m
+     if os.path.exists(cachename) and not force:[m
+       return cachename[m
+ [m
+[32m+[m[32m    if config.FROZEN_CACHE:[m
+[32m+[m[32m      # Raise an exception here rather than exit_with_error since in practice this[m
+[32m+[m[32m      # should never happen[m
+[32m+[m[32m      raise Exception('FROZEN_CACHE is set, but cache file is missing: %s' % shortname)[m
+[32m+[m
+     with self.lock():[m
+       if os.path.exists(cachename) and not force:[m
+         return cachename[m
+[31m-      # it doesn't exist yet, create it[m
+[31m-      if config.FROZEN_CACHE:[m
+[31m-        # it's ok to build small .txt marker files like "vanilla"[m
+[31m-        if not shortname.endswith('.txt'):[m
+[31m-          raise Exception('FROZEN_CACHE disallows building system libs: %s' % shortname)[m
+       if what is None:[m
+         if shortname.endswith(('.bc', '.so', '.a')):[m
+           what = 'system library'[m
+[1mdiff --git a/tools/config.py b/tools/config.py[m
+[1mindex ea0754c04..369f0ea31 100644[m
+[1m--- a/tools/config.py[m
+[1m+++ b/tools/config.py[m
+[36m@@ -75,7 +75,7 @@[m [mdef normalize_config_settings():[m
+   JS_ENGINES = [listify(engine) for engine in JS_ENGINES][m
+   WASM_ENGINES = [listify(engine) for engine in WASM_ENGINES][m
+   if not CACHE:[m
+[31m-    if root_is_writable():[m
+[32m+[m[32m    if FROZEN_CACHE or root_is_writable():[m
+       CACHE = path_from_root('cache')[m
+     else:[m
+       # Use the legacy method of putting the cache in the user's home directory[m
+[1mdiff --git a/tools/shared.py b/tools/shared.py[m
+[1mindex 410104726..9cd310ef8 100644[m
+[1m--- a/tools/shared.py[m
+[1m+++ b/tools/shared.py[m
+[36m@@ -239,8 +239,21 @@[m [mdef generate_sanity():[m
+ [m
+ [m
+ def perform_sanity_checks():[m
+[32m+[m[32m  # some warning, mostly not fatal checks - do them even if EM_IGNORE_SANITY is on[m
+[32m+[m[32m  check_node_version()[m
+[32m+[m[32m  check_llvm_version()[m
+[32m+[m
+[32m+[m[32m  llvm_ok = check_llvm()[m
+[32m+[m
+[32m+[m[32m  if os.environ.get('EM_IGNORE_SANITY'):[m
+[32m+[m[32m    logger.info('EM_IGNORE_SANITY set, ignoring sanity checks')[m
+[32m+[m[32m    return[m
+[32m+[m
+   logger.info('(Emscripten: Running sanity checks)')[m
+ [m
+[32m+[m[32m  if not llvm_ok:[m
+[32m+[m[32m    exit_with_error('failing sanity checks due to previous llvm failure')[m
+[32m+[m
+   with ToolchainProfiler.profile_block('sanity compiler_engine'):[m
+     try:[m
+       run_process(config.NODE_JS + ['-e', 'console.log("hello")'], stdout=PIPE)[m
+[36m@@ -264,11 +277,21 @@[m [mdef check_sanity(force=False):[m
+   """[m
+   if not force and os.environ.get('EMCC_SKIP_SANITY_CHECK') == '1':[m
+     return[m
+[32m+[m
+   # We set EMCC_SKIP_SANITY_CHECK so that any subprocesses that we launch will[m
+   # not re-run the tests.[m
+   os.environ['EMCC_SKIP_SANITY_CHECK'] = '1'[m
+[32m+[m
+[32m+[m[32m  if config.FROZEN_CACHE:[m
+[32m+[m[32m    if force:[m
+[32m+[m[32m      perform_sanity_checks()[m
+[32m+[m[32m    return[m
+[32m+[m
+[32m+[m[32m  if os.environ.get('EM_IGNORE_SANITY'):[m
+[32m+[m[32m    perform_sanity_checks()[m
+[32m+[m[32m    return[m
+[32m+[m
+   with ToolchainProfiler.profile_block('sanity'):[m
+[31m-    check_llvm_version()[m
+     if not config.config_file:[m
+       return # config stored directly in EM_CONFIG => skip sanity checks[m
+     expected = generate_sanity()[m
+[36m@@ -280,14 +303,11 @@[m [mdef check_sanity(force=False):[m
+         if sanity_data != expected:[m
+           logger.info('old sanity: %s' % sanity_data)[m
+           logger.info('new sanity: %s' % expected)[m
+[31m-          if config.FROZEN_CACHE:[m
+[31m-            logger.info('(Emscripten: config changed, cache may need to be cleared, but FROZEN_CACHE is set)')[m
+[31m-          else:[m
+[31m-            logger.info('(Emscripten: config changed, clearing cache)')[m
+[31m-            Cache.erase()[m
+[31m-            # the check actually failed, so definitely write out the sanity file, to[m
+[31m-            # avoid others later seeing failures too[m
+[31m-            force = False[m
+[32m+[m[32m          logger.info('(Emscripten: config changed, clearing cache)')[m
+[32m+[m[32m          Cache.erase()[m
+[32m+[m[32m          # the check actually failed, so definitely write out the sanity file, to[m
+[32m+[m[32m          # avoid others later seeing failures too[m
+[32m+[m[32m          force = False[m
+         else:[m
+           if force:[m
+             logger.debug(f'sanity file up-to-date but check forced: {sanity_file}')[m
+[36m@@ -297,18 +317,6 @@[m [mdef check_sanity(force=False):[m
+       else:[m
+         logger.debug(f'sanity file not found: {sanity_file}')[m
+ [m
+[31m-      # some warning, mostly not fatal checks - do them even if EM_IGNORE_SANITY is on[m
+[31m-      check_node_version()[m
+[31m-[m
+[31m-      llvm_ok = check_llvm()[m
+[31m-[m
+[31m-      if os.environ.get('EM_IGNORE_SANITY'):[m
+[31m-        logger.info('EM_IGNORE_SANITY set, ignoring sanity checks')[m
+[31m-        return[m
+[31m-[m
+[31m-      if not llvm_ok:[m
+[31m-        exit_with_error('failing sanity checks due to previous llvm failure')[m
+[31m-[m
+       perform_sanity_checks()[m
+ [m
+       if not force:[m
