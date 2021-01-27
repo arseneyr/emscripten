@@ -17,4 +17,6 @@ void looper() {
 
 int main() {
   emscripten_set_main_loop(looper, 0, 0);
+  puts("done main");
+  return 0;
 }

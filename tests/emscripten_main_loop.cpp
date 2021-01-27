@@ -11,14 +11,6 @@
 double prevTime = -1.0;
 int frame = 0;
 
-void final(void*) {
-  assert(frame == 110);
-#ifdef REPORT_RESULT
-  printf("Test passed.\n");
-  REPORT_RESULT(0);
-#endif
-}
-
 void looper() {
   frame++;
   double curTime = emscripten_get_now();
@@ -29,11 +21,8 @@ void looper() {
     timesTooSoon++;
     if (timesTooSoon >= 10) {
       printf("Abort: main loop tick was called too quickly after the previous frame, too many times!\n");
-#ifdef REPORT_RESULT
-      REPORT_RESULT(1);
-#endif
       emscripten_cancel_main_loop();
-      exit(0);
+      exit(1);
     }
   }
   prevTime = curTime;
@@ -42,11 +31,8 @@ void looper() {
     timesTooSoon++;
     if (timesTooSoon >= 2) {
       printf("Abort: With swap interval of 4, we should be running at most 15fps! (or 30fps on 120Hz displays) but seems like swap control is not working and we are running at 60fps!\n");
-#ifdef REPORT_RESULT
-      REPORT_RESULT(2);
-#endif
       emscripten_cancel_main_loop();
-      exit(0);
+      exit(2);
     }
   }
   if (frame > 0 && frame < 90 && frame % 10 == 0) {
@@ -73,10 +59,12 @@ void looper() {
     emscripten_set_main_loop(looper, 110, 1);
   } else if (frame == 110) {
     emscripten_cancel_main_loop();
-    emscripten_async_call(final, (void*)0, 1000);
+    printf("Test passed.\n");
+    exit(110);
   }
 }
 
 int main() {
   emscripten_set_main_loop(looper, 5, 1);
+  return 0;
 }
