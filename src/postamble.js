@@ -509,8 +509,9 @@ if (Module['noInitialRun']) shouldRunNow = false;
 
 #endif // HAS_MAIN
 
-#if EXIT_RUNTIME == 0
-#if USE_PTHREADS
+#if EXIT_RUNTIME
+noExitRuntime = false;
+#else
 // EXIT_RUNTIME=0 only applies to the default behavior of the main browser
 // thread.
 // The default behaviour for pthreads is always to exit once they return
@@ -520,6 +521,7 @@ if (Module['noInitialRun']) shouldRunNow = false;
 // pthreads can still choose to set `noExitRuntime` explicitly, or
 // call emscripten_unwind_to_js_event_loop to extend their lifetime beyond
 // their main function.  See comment in src/worker.js for more.
+#if USE_PTHREADS
 noExitRuntime = !ENVIRONMENT_IS_PTHREAD;
 #else
 noExitRuntime = true;
